@@ -36,5 +36,3 @@ Thank you to the people who made [Bun](https://bun.com/), this project would hav
 Thank you contributors of [Oceanic](https://github.com/OceanicJS/Oceanic) for your discord library, this is great.
 
 Thank you Hugging Face for [Transformers.js](https://huggingface.co/docs/transformers.js/en/index) and [Distil-Whisper](https://github.com/huggingface/distil-whisper)
-
-Thank you, Rafael S. Rocha for [wavefile](https://github.com/rochars/wavefile)
