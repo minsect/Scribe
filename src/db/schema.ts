@@ -14,9 +14,9 @@ export const scribeLinks = sqliteTable("scribe_channel_links", {
 });
 
 export const scribeConsent = sqliteTable("scribeConsent", {
-    voiceChannelId: text().primaryKey(),
+    voiceChannelId: text().notNull(),
     guildId: text().notNull(),
-    userId: text().notNull(),
+    userId: text().notNull().primaryKey(),
 });
 
 
