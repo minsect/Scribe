@@ -1,17 +1,14 @@
 import {ChannelTypes, Client, InteractionTypes, Member, StageChannel, VoiceChannel, Uncached} from "oceanic.js";
 import { EndBehaviorType } from "@discordjs/voice";
 import {readdirSync} from 'fs';
-import * as transformers from "@huggingface/transformers"
 import {CommandExport} from "./types";
 import {drizzle} from 'drizzle-orm/bun-sqlite';
 import {notificationChannelLinks, scribeLinks, scribeConsent} from "./db/schema";
 import {eq, and} from "drizzle-orm";
 import { OpusEncoder } from '@discordjs/opus';
+import {spawn} from "child_process";
 type VoiceConnection = Awaited<ReturnType<VoiceChannel["join"]>>;
 const db = drizzle(process.env.DB_FILE_NAME!);
-const transcriber = await transformers.pipeline('automatic-speech-recognition', 'distil-whisper/distil-small.en', {
-    device: "cpu" // Set to auto when a GPU is available
-});
 
 function prettyTime(ms: number) {
     const totalSeconds = Math.floor(ms / 1000);
@@ -63,6 +60,63 @@ function getVolume(float32Array: Float32Array): number {
     return Math.sqrt(sum / float32Array.length);
 }
 
+async function transcribe(audioBuffer: Buffer<ArrayBuffer>, textChannelId: string, userId: string): Promise<string | void> {
+    console.log("new transcription requested...")
+    const ffmpeg = spawn("ffmpeg", [
+        "-f", "s16le",
+        "-ar", "48000",
+        "-ac", "2",
+        "-i", "pipe:0",
+        "-v", "quiet",
+        "-ac", "1",
+        "-f", "wav",
+        "-" //output to stdout
+    ])
+    
+    ffmpeg.stdin.write(audioBuffer)
+    ffmpeg.stdin.end()
+    
+    const stdoutChunks: Buffer[] = [];
+
+    ffmpeg.stdout.on('data', (data) => {
+        stdoutChunks.push(data);
+    });
+    ffmpeg.on("exit", async () => {
+        const audioBlob = new Blob([Buffer.concat(stdoutChunks)], { type: 'audio/wav' });
+        const body = new FormData()
+        body.set("temperature", "0.0");
+        body.set("response_format", "json");
+        body.set("temperature_inc", "0.2");
+        body.set("file", audioBlob, "rec.wav")
+        const response = await fetch("http://127.0.0.1:8080/inference", {
+            method: "POST",
+            body,
+        });
+        if (response.ok) {
+            console.log("response ok!")
+            const data = await response.json();
+            if (!("text" in data) || data.text.trim() == "") return;
+            const destinationChannel = client.getChannel(textChannelId);
+            if (destinationChannel && (destinationChannel.type == ChannelTypes.GUILD_TEXT || destinationChannel.type == ChannelTypes.GUILD_VOICE)) {
+                const member = await destinationChannel.guild.getMember(userId);
+                if (!member || member == null) return;
+                const webhooks = await destinationChannel.getWebhooks();
+                if (webhooks.length > 0) {
+                    try {
+                        webhooks[0].execute({
+                            username: member.displayName,
+                            avatarURL: member.avatarURL(),
+                            content: data.text.trim()
+                        });
+                    } catch (e) {}
+                }
+            } 
+        } else {
+            console.log(response.status)
+        }
+    })
+}
+
 async function speakHandler(userId: string, connection: VoiceConnection, textChannelId: string, voiceChannelId: string) {
     const scribeUsers = await db.select().from(scribeConsent).where(and(
         eq(scribeConsent.userId, userId),
@@ -88,39 +142,7 @@ async function speakHandler(userId: string, connection: VoiceConnection, textCha
         const fullPcm = Buffer.concat(pcmChunks);
         if (fullPcm.length < 30000) return;
 
-        const samples = fullPcm.length / 4; // 2 channels * 2 bytes
-        const monoFloat32 = new Float32Array(samples);
-        
-        for (let i = 0; i < samples; i++) {
-            const left = fullPcm.readInt16LE(i * 4);
-            const right = fullPcm.readInt16LE(i * 4 + 2);
-            monoFloat32[i] = ((left + right) / 2) / 32768.0;
-        }
-        const downsampled = new Float32Array(Math.floor(monoFloat32.length / 3));
-        for (let i = 0; i < downsampled.length; i++) {
-            downsampled[i] = monoFloat32[i * 3];
-        }
-        if (getVolume(downsampled) < 0.01) {
-            return;
-        }
-
-        const output = await transcriber(downsampled);
-        if (!("text" in output) || output.text.trim() == "") {return;}
-        const destinationChannel = client.getChannel(textChannelId)
-        if (destinationChannel && (destinationChannel.type == ChannelTypes.GUILD_TEXT || destinationChannel.type == ChannelTypes.GUILD_VOICE)) {
-            const member = await destinationChannel.guild.getMember(userId);
-            if (!member || member == null) {return;}
-            const webhooks = await destinationChannel.getWebhooks();
-            if (webhooks.length > 0) {
-                try {
-                    webhooks[0].execute({
-                        username: member.displayName,
-                        avatarURL: member.avatarURL(),
-                        content: output.text.trim()
-                    });
-                } catch (e) {}
-            }
-        } 
+        transcribe(fullPcm, textChannelId, userId) 
     });
 }
 

@@ -4,3 +4,4 @@ package-lock.json
 bun.lock
 data.sqlite
 flake.lock
+models

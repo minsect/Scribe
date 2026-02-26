@@ -14,11 +14,13 @@
   "dependencies": {
     "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.19.0",
-    "@huggingface/transformers": "^3.8.1",
+    "@snazzah/davey": "^0.1.9",
     "better-sqlite3": "^12.6.2",
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.45.1",
     "oceanic.js": "^1.13.0",
+    "opusscript": "^0.1.1",
+    "prism-media": "2.0.0-alpha.0",
     "wav": "^1.0.2"
   }
 }
