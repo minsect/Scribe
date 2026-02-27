@@ -1,5 +1,5 @@
 {
-  description = "Basic flake for Bun.js project";
+  description = "Flake for a whisper project in node.js";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
