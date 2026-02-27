@@ -1,6 +1,6 @@
-import {CommandExport} from "../types";
+import type {CommandExport} from "../types.ts";
 import { eq } from 'drizzle-orm';
-import { notificationChannelLinks } from '../db/schema';
+import { notificationChannelLinks } from '../db/schema.ts';
 
 import {
     ApplicationCommandOptionTypes,
@@ -8,9 +8,9 @@ import {
     ChannelTypes, CommandInteraction,
     InteractionContextTypes, MessageFlags
 } from "oceanic.js";
-import {BunSQLiteDatabase} from "drizzle-orm/bun-sqlite";
+import { LibSQLDatabase } from "drizzle-orm/libsql";
 
-async function execute(interaction: CommandInteraction, database: BunSQLiteDatabase): Promise<void> {
+async function execute(interaction: CommandInteraction, database: LibSQLDatabase): Promise<void> {
     const voiceChannel = interaction.data.options.getChannel("voice-channel");
     if (!interaction.guild || !voiceChannel || !interaction.member) {
         await interaction.createMessage({content: `An error occured! missing critical information.`, flags: MessageFlags.EPHEMERAL});

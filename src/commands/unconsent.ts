@@ -1,6 +1,6 @@
-import {CommandExport} from "../types";
+import type {CommandExport} from "../types.ts";
 import { eq, and } from 'drizzle-orm';
-import {scribeConsent} from '../db/schema';
+import {scribeConsent} from '../db/schema.ts';
 
 import {
     ApplicationCommandOptionTypes,
@@ -8,9 +8,9 @@ import {
     InteractionContextTypes,
     MessageFlags
 } from "oceanic.js";
-import {BunSQLiteDatabase} from "drizzle-orm/bun-sqlite";
+import { LibSQLDatabase } from "drizzle-orm/libsql";
 
-async function execute(interaction: CommandInteraction, database: BunSQLiteDatabase): Promise<void> {
+async function execute(interaction: CommandInteraction, database: LibSQLDatabase): Promise<void> {
     if (!interaction.member || interaction.member == null || !interaction.guildID) {
         await interaction.createMessage({
             content: "We cannot trace you. Please try this command in a guild.", 
@@ -48,7 +48,7 @@ async function execute(interaction: CommandInteraction, database: BunSQLiteDatab
 
 }
 
-async function handleAutocomplete(interaction: AutocompleteInteraction, database: BunSQLiteDatabase) {
+async function handleAutocomplete(interaction: AutocompleteInteraction, database: LibSQLDatabase) {
     const focused = interaction.data.options.getFocused();
     if (focused && focused.name === "voice-channel") {
         const scribeChannelLinks = await database.select().from(scribeConsent).where(and(

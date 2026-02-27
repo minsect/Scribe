@@ -1,15 +1,15 @@
-import {CommandExport} from "../types";
+import type {CommandExport} from "../types.ts";
 import { eq, and } from 'drizzle-orm';
-import {notificationChannelLinks, scribeConsent, scribeLinks} from '../db/schema';
+import {notificationChannelLinks, scribeConsent, scribeLinks} from '../db/schema.ts';
 
 import {
     ApplicationCommandTypes, CommandInteraction,
     InteractionContextTypes,
     MessageFlags
 } from "oceanic.js";
-import {BunSQLiteDatabase} from "drizzle-orm/bun-sqlite";
+import { LibSQLDatabase } from "drizzle-orm/libsql";
 
-async function execute(interaction: CommandInteraction, database: BunSQLiteDatabase): Promise<void> {
+async function execute(interaction: CommandInteraction, database: LibSQLDatabase): Promise<void> {
     if (!interaction.member || interaction.member == null || interaction.guildID == null) {
         await interaction.createMessage({
             content: "We cannot trace you. Please try this command in a guild.", 

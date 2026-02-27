@@ -1,15 +1,17 @@
-import {ChannelTypes, Client, InteractionTypes, Member, StageChannel, VoiceChannel, Uncached} from "oceanic.js";
+import { Client, ChannelTypes, InteractionTypes, Member, StageChannel, VoiceChannel } from "oceanic.js";
+import type { Uncached } from "oceanic.js";
 import { EndBehaviorType } from "@discordjs/voice";
-import {readdirSync} from 'fs';
-import {CommandExport} from "./types";
-import {drizzle} from 'drizzle-orm/bun-sqlite';
-import {notificationChannelLinks, scribeLinks, scribeConsent} from "./db/schema";
-import {eq, and} from "drizzle-orm";
-import { OpusEncoder } from '@discordjs/opus';
-import {spawn} from "child_process";
+import { readdirSync } from 'fs';
+import type { CommandExport } from "./types.ts";
+import { drizzle } from 'drizzle-orm/libsql';
+import { notificationChannelLinks, scribeLinks, scribeConsent } from "./db/schema.ts";
+import { eq, and } from "drizzle-orm";
+import pkg from '@discordjs/opus';
+const { OpusEncoder } = pkg;
+import { spawn } from "child_process";
 type VoiceConnection = Awaited<ReturnType<VoiceChannel["join"]>>;
-const db = drizzle(process.env.DB_FILE_NAME!);
-
+process.loadEnvFile(".env")
+const db = drizzle("file:" + process.env.DB_FILE_NAME!);
 function prettyTime(ms: number) {
     const totalSeconds = Math.floor(ms / 1000);
     const minutes = Math.floor(totalSeconds / 60);
@@ -22,19 +24,19 @@ function prettyTime(ms: number) {
 }
 
 // @ts-ignore
-const commands = await Promise.all(readdirSync(import.meta.dir+"/commands").map(async (filename) => {
+const commands = await Promise.all(readdirSync("./src/commands").map(async (filename) => {
     // @ts-ignore
-    const command: CommandExport = (await import(import.meta.dir+"/commands/"+filename)).default;
+    const command: CommandExport = (await import("./commands/" + filename)).default;
     return command;
 }));
 const commandsByName = commands.reduce((acc, command) => {
     acc[command.CommandInfo.name] = command;
     return acc
-}, {} as {[name: string]: CommandExport})
+}, {} as { [name: string]: CommandExport })
 
 const client = new Client({ auth: "Bot " + process.env.TOKEN });
 
-client.on("ready", async() => {
+client.on("ready", async () => {
     console.log("Ready as", client.user.tag);
     await client.application.bulkEditGlobalCommands(commands.map((command) => command.CommandInfo))
 });
@@ -50,15 +52,7 @@ client.on("interactionCreate", async (interaction) => {
     };
 })
 
-const callStatuses: {[voiceChannelId: string]: {timeout?: ReturnType<typeof setTimeout>, joinTime: number}} = {}
-
-function getVolume(float32Array: Float32Array): number {
-    let sum = 0;
-    for (const sample of float32Array) {
-        sum += sample * sample;
-    }
-    return Math.sqrt(sum / float32Array.length);
-}
+const callStatuses: { [voiceChannelId: string]: { timeout?: ReturnType<typeof setTimeout>, joinTime: number } } = {}
 
 async function transcribe(audioBuffer: Buffer<ArrayBuffer>, textChannelId: string, userId: string): Promise<string | void> {
     console.log("new transcription requested...")
@@ -72,10 +66,10 @@ async function transcribe(audioBuffer: Buffer<ArrayBuffer>, textChannelId: strin
         "-f", "wav",
         "-" //output to stdout
     ])
-    
+
     ffmpeg.stdin.write(audioBuffer)
     ffmpeg.stdin.end()
-    
+
     const stdoutChunks: Buffer[] = [];
 
     ffmpeg.stdout.on('data', (data) => {
@@ -108,9 +102,9 @@ async function transcribe(audioBuffer: Buffer<ArrayBuffer>, textChannelId: strin
                             avatarURL: member.avatarURL(),
                             content: data.text.trim()
                         });
-                    } catch (e) {}
+                    } catch (e) { }
                 }
-            } 
+            }
         } else {
             console.log(response.status)
         }
@@ -135,19 +129,19 @@ async function speakHandler(userId: string, connection: VoiceConnection, textCha
     audioStream.on('data', (chunk) => {
         try {
             pcmChunks.push(encoder.decode(chunk));
-        } catch (e) {}
+        } catch (e) { }
     });
 
     audioStream.on('end', async () => {
         const fullPcm = Buffer.concat(pcmChunks);
         if (fullPcm.length < 30000) return;
 
-        transcribe(fullPcm, textChannelId, userId) 
+        transcribe(fullPcm, textChannelId, userId)
     });
 }
 
 async function voiceChannelJoin(member: Member, channel: Uncached | VoiceChannel | StageChannel) {
-    if (member.id == client.user.id) {return;}
+    if (member.id == client.user.id) { return; }
     let voiceChannel: VoiceChannel | StageChannel;
     if (!("voiceMembers" in channel)) {
         let vc = client.getChannel(channel.id)
@@ -168,7 +162,7 @@ async function voiceChannelJoin(member: Member, channel: Uncached | VoiceChannel
             eq(scribeConsent.voiceChannelId, voiceChannel.id)
         ));
         if (scribeUsers.length > 0) {
-            const vcConnection = await voiceChannel.join({selfMute: true})
+            const vcConnection = await voiceChannel.join({ selfMute: true })
             const speakingStartEvent = vcConnection.receiver.speaking.on("start", (userId) => {
                 if (userId === member.id) {
                     speakHandler(userId, vcConnection, scribeLink[0].scribeChannelId, voiceChannel.id)
@@ -188,18 +182,18 @@ async function voiceChannelJoin(member: Member, channel: Uncached | VoiceChannel
                 const updatedChannel = client.getChannel(voiceChannel.id)
                 if (updatedChannel && updatedChannel.type == ChannelTypes.GUILD_VOICE && updatedChannel.voiceMembers.filter(member => member.id != client.user.id).length >= 1) {
                     const roleId = relatedLinks[0].roleId;
-                    await destinationChannel.createMessage({ content: `<@&${roleId}> Call in <#${voiceChannel.id}> started by <@${member.id}>`, allowedMentions: {everyone: false, roles: [roleId], users: false}})
+                    await destinationChannel.createMessage({ content: `<@&${roleId}> Call in <#${voiceChannel.id}> started by <@${member.id}>`, allowedMentions: { everyone: false, roles: [roleId], users: false } })
                 }
                 if (callStatuses[voiceChannel.id]) {
                     delete callStatuses[voiceChannel.id].timeout;
                 }
             }, 5000);
-            callStatuses[voiceChannel.id] = {timeout: timer, joinTime: now};
+            callStatuses[voiceChannel.id] = { timeout: timer, joinTime: now };
         }
     }
 }
-async function voiceChannelLeave (member: Member, channel: Uncached | VoiceChannel | StageChannel | null) {
-    if (member.id == client.user.id) {return;}
+async function voiceChannelLeave(member: Member, channel: Uncached | VoiceChannel | StageChannel | null) {
+    if (member.id == client.user.id) { return; }
     if (!channel) { return; }
     let voiceChannel: VoiceChannel | StageChannel;
     if (!("voiceMembers" in channel)) {
@@ -225,7 +219,7 @@ async function voiceChannelLeave (member: Member, channel: Uncached | VoiceChann
             } else {
                 const destinationChannel = voiceChannel.guild.channels.find((channel) => channel.id == relatedLinks[0].notifChannelId);
                 if (destinationChannel && (destinationChannel.type == ChannelTypes.GUILD_TEXT || destinationChannel.type == ChannelTypes.GUILD_VOICE)) {
-                    await destinationChannel.createMessage({ content: `Call in <#${voiceChannel.id}> ended: lasted for ${prettyTime(Date.now()-callStatus.joinTime)}`, allowedMentions: {everyone: false, roles: false, users: false}})
+                    await destinationChannel.createMessage({ content: `Call in <#${voiceChannel.id}> ended: lasted for ${prettyTime(Date.now() - callStatus.joinTime)}`, allowedMentions: { everyone: false, roles: false, users: false } })
                 }
             }
             delete callStatuses[voiceChannel.id];
