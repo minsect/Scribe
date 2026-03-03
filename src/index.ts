@@ -1,6 +1,8 @@
 import { Client, ChannelTypes, InteractionTypes, Member, StageChannel, VoiceChannel } from "oceanic.js";
 import type { Uncached } from "oceanic.js";
 import { EndBehaviorType } from "@discordjs/voice";
+import fs from "fs/promises";
+import path from "path";
 import { readdirSync } from 'fs';
 import type { CommandExport } from "./types.ts";
 import { drizzle } from 'drizzle-orm/libsql';
@@ -10,8 +12,13 @@ import pkg from '@discordjs/opus';
 const { OpusEncoder } = pkg;
 import { spawn } from "child_process";
 type VoiceConnection = Awaited<ReturnType<VoiceChannel["join"]>>;
+
 process.loadEnvFile(".env")
+
+const client = new Client({ auth: "Bot " + process.env.TOKEN });
+
 const db = drizzle("file:" + process.env.DB_FILE_NAME!);
+
 function prettyTime(ms: number) {
     const totalSeconds = Math.floor(ms / 1000);
     const minutes = Math.floor(totalSeconds / 60);
@@ -23,34 +30,26 @@ function prettyTime(ms: number) {
     return [mDisplay, sDisplay].filter(Boolean).join(" and ") || "0 seconds";
 }
 
+const commandsPath = path.join(import.meta.dirname, "commands")
+
+const commands = new Map<string, CommandExport>()
+
+for (const file of (await fs.readdir(commandsPath))) {
+    const filePath = path.join(commandsPath, file)
+    if (file.endsWith(".ts")) {
+        const info = (await import(filePath)).default 
+        commands.set(info.CommandInfo.name, info)
+    }
+}
+
 // @ts-ignore
+/*
 const commands = await Promise.all(readdirSync("./src/commands").map(async (filename) => {
     // @ts-ignore
     const command: CommandExport = (await import("./commands/" + filename)).default;
     return command;
 }));
-const commandsByName = commands.reduce((acc, command) => {
-    acc[command.CommandInfo.name] = command;
-    return acc
-}, {} as { [name: string]: CommandExport })
-
-const client = new Client({ auth: "Bot " + process.env.TOKEN });
-
-client.on("ready", async () => {
-    console.log("Ready as", client.user.tag);
-    await client.application.bulkEditGlobalCommands(commands.map((command) => command.CommandInfo))
-});
-
-client.on("interactionCreate", async (interaction) => {
-    if (interaction.type == InteractionTypes.APPLICATION_COMMAND && interaction.isChatInputCommand()) {
-        await commandsByName[interaction.data.name].execute(interaction, db);
-    } else if (interaction.type == InteractionTypes.APPLICATION_COMMAND_AUTOCOMPLETE) {
-        const command = commandsByName[interaction.data.name];
-        if (command && command.handleAutocomplete) {
-            await command.handleAutocomplete(interaction, db);
-        }
-    };
-})
+*/
 
 const callStatuses: { [voiceChannelId: string]: { timeout?: ReturnType<typeof setTimeout>, joinTime: number } } = {}
 
@@ -192,6 +191,7 @@ async function voiceChannelJoin(member: Member, channel: Uncached | VoiceChannel
         }
     }
 }
+
 async function voiceChannelLeave(member: Member, channel: Uncached | VoiceChannel | StageChannel | null) {
     if (member.id == client.user.id) { return; }
     if (!channel) { return; }
@@ -237,6 +237,24 @@ client.on("voiceChannelSwitch", async (member, voiceChannel: Uncached | VoiceCha
 client.on("error", (err) => {
     console.error("Something Broke!", err);
 });
+
+client.on("ready", async () => {
+    console.log("Ready as", client.user.tag);
+    await client.application.bulkEditGlobalCommands(Array.from(commands.values(), cmd => cmd.CommandInfo))
+});
+
+client.on("interactionCreate", async (interaction) => {
+    if (interaction.type == InteractionTypes.APPLICATION_COMMAND && interaction.isChatInputCommand()) {
+        await commands.get(interaction.data.name)?.execute(interaction, db);
+        //await commandsByName[interaction.data.name].execute(interaction, db);
+    } else if (interaction.type == InteractionTypes.APPLICATION_COMMAND_AUTOCOMPLETE) {
+        const command = commands.get(interaction.data.name);
+        //const command = commandsByName[interaction.data.name];
+        if (command && command.handleAutocomplete) {
+            await command.handleAutocomplete(interaction, db);
+        }
+    };
+})
 
 client.connect();
 
