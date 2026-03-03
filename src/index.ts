@@ -42,15 +42,6 @@ for (const file of (await fs.readdir(commandsPath))) {
     }
 }
 
-// @ts-ignore
-/*
-const commands = await Promise.all(readdirSync("./src/commands").map(async (filename) => {
-    // @ts-ignore
-    const command: CommandExport = (await import("./commands/" + filename)).default;
-    return command;
-}));
-*/
-
 const callStatuses: { [voiceChannelId: string]: { timeout?: ReturnType<typeof setTimeout>, joinTime: number } } = {}
 
 async function transcribe(audioBuffer: Buffer<ArrayBuffer>, textChannelId: string, userId: string): Promise<string | void> {
