@@ -10,6 +10,7 @@ import { eq, and } from "drizzle-orm";
 import pkg from '@discordjs/opus';
 const { OpusEncoder } = pkg;
 import { spawn } from "child_process";
+import { WhisperManager } from "./whisper.ts";
 type VoiceConnection = Awaited<ReturnType<VoiceChannel["join"]>>;
 
 process.loadEnvFile(".env")
@@ -29,7 +30,9 @@ function prettyTime(ms: number) {
 const queue = new Map<string, { content?: ExecuteWebhookOptions, executing?: boolean }[]>()
 
 setInterval(async () => {
+    let totalPending = 0;
     for (const [textChannelId, messages] of queue.entries()) {
+        totalPending += messages.length;
         if (messages.length === 0) continue;
 
         const nextMessage = messages.find(msg => msg.content && !msg.executing);
@@ -58,6 +61,18 @@ setInterval(async () => {
             nextMessage.executing = false;
         }
     }
+
+    // Check if we should stop whisper
+    if (totalPending === 0 && WhisperManager.isRunning()) {
+        const activeConnections = Array.from(client.guilds.values()).some(guild =>
+            Array.from(guild.channels.values()).some(ch =>
+                (ch.type === ChannelTypes.GUILD_VOICE || ch.type === ChannelTypes.GUILD_STAGE_VOICE) && "voiceMembers" in ch && ch.voiceMembers.has(client.user.id)
+            )
+        );
+        if (!activeConnections) {
+            WhisperManager.stop();
+        }
+    }
 }, 300);
 
 const commandsPath = path.join(import.meta.dirname, "commands")
@@ -80,7 +95,6 @@ function enqueuePlaceholder(textChannelId: string, uuid?: string) {
     return placeholder;
 }
 async function transcribe(audioBuffer: Buffer<ArrayBuffer>, textChannelId: string, userId: string) {
-    console.log("new transcription requested...");
 
     const destinationChannel = client.getChannel(textChannelId);
     if (!destinationChannel || !(destinationChannel.type === ChannelTypes.GUILD_TEXT || destinationChannel.type === ChannelTypes.GUILD_VOICE)) return;
@@ -115,7 +129,8 @@ async function transcribe(audioBuffer: Buffer<ArrayBuffer>, textChannelId: strin
         body.set("temperature_inc", "0.2");
         body.set("file", audioBlob, "rec.wav");
 
-        const response = await fetch("http://127.0.0.1:8080/inference", { method: "POST", body });
+        const port = process.env.WHISPER_PORT || "8080";
+        const response = await fetch(`http://127.0.0.1:${port}/inference`, { method: "POST", body });
         if (!response.ok) return;
 
         const data = await response.json();
@@ -138,22 +153,49 @@ async function speakHandler(userId: string, connection: VoiceConnection, textCha
     if (scribeUsers.length === 0) return;
 
     const encoder = new OpusEncoder(48000, 2);
-    const audioStream = connection.receiver.subscribe(userId, { end: { behavior: EndBehaviorType.AfterSilence, duration: 100 } });
-
+    const audioStream = connection.receiver.subscribe(userId, { end: { behavior: EndBehaviorType.Manual } });
+    audioStream.on('error', (error) => {
+        console.error(`[ERROR] Audio stream error for user ${userId}:`, error);
+    });
+    
     const pcmChunks: Buffer[] = [];
-    audioStream.on('data', chunk => {
+    let silenceTimer: NodeJS.Timeout | null = null;
+
+    const resetSilenceTimer = () => {
+        if (silenceTimer) clearTimeout(silenceTimer);
+        silenceTimer = setTimeout(async () => {
+            await onEnd();
+            audioStream.destroy();
+        }, 100);
+    };
+
+    // Start the initial timer
+    resetSilenceTimer();
+
+    audioStream.on('data', (chunk: Buffer) => {
+        // Check if the chunk contains any non-zero data (actual audio)
+        const isSilent = chunk.every((byte: number) => byte === 0);
+        
+        if (!isSilent && chunk.length > 0) {
+            resetSilenceTimer();
+        }
+        
         try { pcmChunks.push(encoder.decode(chunk)); } catch {}
     });
 
-    audioStream.on('end', async function handler() {
+    let ended = false;
+    const onEnd = async () => {
+        if (ended) return;
+        ended = true;
+        
+        if (silenceTimer) clearTimeout(silenceTimer);
         const fullPcm = Buffer.concat(pcmChunks);
         if (fullPcm.length < 30000) return;
-
-        audioStream.off('end', handler);
-
         transcribe(fullPcm, textChannelId, userId);
+    };
 
-    });
+    audioStream.on('end', onEnd);
+    audioStream.on('close', onEnd);
 }
 
 async function voiceChannelJoin(member: Member, channel: Uncached | VoiceChannel | StageChannel) {
@@ -173,7 +215,9 @@ async function voiceChannelJoin(member: Member, channel: Uncached | VoiceChannel
             eq(scribeConsent.voiceChannelId, voiceChannel.id)
         ));
         if (scribeUsers.length > 0) {
-            const vcConnection = await voiceChannel.join({ selfMute: true });
+            await WhisperManager.start();
+            if (voiceChannel.voiceMembers.filter(m => m.id !== client.user.id).length === 0) return;
+            const vcConnection = await voiceChannel.join({ selfMute: true, debug: true });
             vcConnection.receiver.speaking.on("start", (userId) => {
                 if (userId === member.id) speakHandler(userId, vcConnection, scribeLink[0].scribeChannelId, voiceChannel.id);
             });
