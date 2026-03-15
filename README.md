@@ -10,8 +10,7 @@ Requirements:
 - An internet connection
 1. Download the source code (use git clone maybe?)
 2. Make a .env file in the root directory of the bot (next to package.json), then configure it.
-   1. `TOKEN`: The discord bot token. this is required for it to function.
-   2. `DB_FILE_NAME`: The filename for the SQLite database, also required.
+   - Refer to the .env.example for what is required to set
 3. Run `npm install` to install all the required packages.
 4. Run `npx drizzle-kit push` to initialize the database.
 5. Download an AI model compatible with whisper.cpp and run it (find some [here](https://huggingface.co/ggerganov/whisper.cpp/tree/main))
