@@ -1,6 +1,7 @@
 import { Client, ChannelTypes, InteractionTypes, Member, StageChannel, VoiceChannel } from "oceanic.js";
 import type { ExecuteWebhookOptions, Uncached } from "oceanic.js";
-import { EndBehaviorType } from "@discordjs/voice";
+import { EndBehaviorType, joinVoiceChannel } from "@discordjs/voice";
+import type { VoiceConnection } from "@discordjs/voice";
 import fs from "fs/promises";
 import path from "path";
 import type { CommandExport } from "./types.ts";
@@ -11,12 +12,14 @@ import pkg from '@discordjs/opus';
 const { OpusEncoder } = pkg;
 import { spawn } from "child_process";
 import { WhisperManager } from "./whisper.ts";
-type VoiceConnection = Awaited<ReturnType<VoiceChannel["join"]>>;
 
 process.loadEnvFile(".env")
 
 const client = new Client({ auth: "Bot " + process.env.TOKEN });
 const db = drizzle("file:" + process.env.DB_FILE_NAME!);
+const daveDecryptionFailureTolerance = Number.parseInt(process.env.DAVE_DECRYPTION_FAILURE_TOLERANCE ?? "250", 10);
+const activeSpeechStreams = new Set<string>();
+const scribeReceiverChannels = new Set<string>();
 
 function prettyTime(ms: number) {
     const totalSeconds = Math.floor(ms / 1000);
@@ -86,6 +89,19 @@ for (const file of (await fs.readdir(commandsPath))) {
 
 const callStatuses: { [voiceChannelId: string]: { timeout?: ReturnType<typeof setTimeout>, joinTime: number } } = {}
 
+function joinScribeVoiceChannel(voiceChannel: VoiceChannel | StageChannel) {
+    return joinVoiceChannel({
+        channelId: voiceChannel.id,
+        guildId: voiceChannel.guild.id,
+        adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+        selfMute: true,
+        selfDeaf: false,
+        debug: true,
+        daveEncryption: true,
+        decryptionFailureTolerance: Number.isFinite(daveDecryptionFailureTolerance) ? daveDecryptionFailureTolerance : 250
+    });
+}
+
 function enqueuePlaceholder(textChannelId: string, uuid?: string) {
     if (!queue.has(textChannelId)) queue.set(textChannelId, []);
 
@@ -123,39 +139,34 @@ async function transcribe(audioBuffer: Buffer<ArrayBuffer>, textChannelId: strin
 
     ffmpeg.on('exit', async () => {
         const audioBlob = new Blob([Buffer.concat(stdoutChunks)], { type: 'audio/wav' });
-        const body = new FormData();
-        body.set("temperature", "0.0");
-        body.set("response_format", "json");
-        body.set("temperature_inc", "0.2");
-        body.set("file", audioBlob, "rec.wav");
-
-        const port = process.env.WHISPER_PORT || "8080";
-        const response = await fetch(`http://127.0.0.1:${port}/inference`, { method: "POST", body });
-        if (!response.ok) return;
-
-        const data = await response.json();
-        if (!("text" in data) || data.text.trim() === "") return;
+        const text = await WhisperManager.transcribe(audioBlob);
+        if (!text) return;
 
         // Update placeholder
         placeholder.content = {
             username: member.displayName,
             avatarURL: member.avatarURL(),
-            content: data.text.trim()
+            content: text
         };
     });
 }
 
 async function speakHandler(userId: string, connection: VoiceConnection, textChannelId: string, voiceChannelId: string) {
+    const streamKey = `${voiceChannelId}:${userId}`;
+    if (activeSpeechStreams.has(streamKey)) return;
+
     const scribeUsers = await db.select().from(scribeConsent).where(and(
         eq(scribeConsent.userId, userId),
         eq(scribeConsent.voiceChannelId, voiceChannelId)
     ));
     if (scribeUsers.length === 0) return;
 
+    activeSpeechStreams.add(streamKey);
     const encoder = new OpusEncoder(48000, 2);
     const audioStream = connection.receiver.subscribe(userId, { end: { behavior: EndBehaviorType.Manual } });
     audioStream.on('error', (error) => {
         console.error(`[ERROR] Audio stream error for user ${userId}:`, error);
+        activeSpeechStreams.delete(streamKey);
     });
     
     const pcmChunks: Buffer[] = [];
@@ -187,6 +198,7 @@ async function speakHandler(userId: string, connection: VoiceConnection, textCha
     const onEnd = async () => {
         if (ended) return;
         ended = true;
+        activeSpeechStreams.delete(streamKey);
         
         if (silenceTimer) clearTimeout(silenceTimer);
         const fullPcm = Buffer.concat(pcmChunks);
@@ -217,10 +229,13 @@ async function voiceChannelJoin(member: Member, channel: Uncached | VoiceChannel
         if (scribeUsers.length > 0) {
             await WhisperManager.start();
             if (voiceChannel.voiceMembers.filter(m => m.id !== client.user.id).length === 0) return;
-            const vcConnection = await voiceChannel.join({ selfMute: true, debug: true });
-            vcConnection.receiver.speaking.on("start", (userId) => {
-                if (userId === member.id) speakHandler(userId, vcConnection, scribeLink[0].scribeChannelId, voiceChannel.id);
-            });
+            const vcConnection = joinScribeVoiceChannel(voiceChannel);
+            if (!scribeReceiverChannels.has(voiceChannel.id)) {
+                scribeReceiverChannels.add(voiceChannel.id);
+                vcConnection.receiver.speaking.on("start", (userId) => {
+                    speakHandler(userId, vcConnection, scribeLink[0].scribeChannelId, voiceChannel.id);
+                });
+            }
         }
     }
 
@@ -260,7 +275,13 @@ async function voiceChannelLeave(member: Member, channel: Uncached | VoiceChanne
     if (voiceChannel.voiceMembers.filter(m => m.id !== client.user.id).length !== 0) return;
 
     const relatedLinks = await db.select().from(notificationChannelLinks).where(eq(notificationChannelLinks.voiceChannelId, voiceChannel.id));
-    if (voiceChannel.voiceMembers.has(client.user.id)) voiceChannel.leave();
+    if (voiceChannel.voiceMembers.has(client.user.id)) {
+        scribeReceiverChannels.delete(voiceChannel.id);
+        for (const streamKey of activeSpeechStreams) {
+            if (streamKey.startsWith(`${voiceChannel.id}:`)) activeSpeechStreams.delete(streamKey);
+        }
+        voiceChannel.leave();
+    }
 
     if (relatedLinks.length > 0 && callStatuses[voiceChannel.id]) {
         const callStatus = callStatuses[voiceChannel.id];

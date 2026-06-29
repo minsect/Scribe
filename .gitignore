@@ -5,3 +5,4 @@ bun.lock
 data.sqlite
 flake.lock
 models
+hf-hub-cache

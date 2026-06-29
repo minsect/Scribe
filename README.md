@@ -4,7 +4,7 @@ Discord bot to notify when a user joins a voice chat, and to transcribe their wo
 ## Usage
 Requirements: 
 - [Node.js >20](https://nodejs.org/)
-- [Whisper.cpp server](https://github.com/ggml-org/whisper.cpp)
+- Docker
 - [ffmpeg](https://www.ffmpeg.org/)
 - A decent computer for the AI model (recommended at least 4GB vram)
 - An internet connection
@@ -38,6 +38,6 @@ Thank you to the people who made [Node.js](https://nodejs.org/).
 
 Thank you contributors of [Oceanic](https://github.com/OceanicJS/Oceanic) for your discord library, this is great.
 
-Thank you to people who made [Whisper.cpp](https://github.com/ggml-org/whisper.cpp), this project is great
-
 Thank you Snazzah for making [Davey](https://github.com/Snazzah/davey), having this dependency fixes all issues with discord opus.
+
+Thank you to the people who made [Speaches](https://github.com/speaches-ai/speaches).
